@@ -1,76 +1,89 @@
-import pandas as pd
-import openpyxl
-from openpyxl.utils import range_boundaries
 import os
+import pandas as pd
+from openpyxl import load_workbook
 
-def read_pivot_table(file_directory, file_name, sheet_name, pivot_table_name, chunk_size=1000):
-    """
-    Reads a pivot table from an Excel file into a Pandas DataFrame using data chunking.
+def read_large_pivot(file_directory: str, file_name: str, sheet_name: str, chunk_size: int = 1000) -> pd.DataFrame:
+    """Reads a large pivot table's cached data from an Excel sheet into a Pandas DataFrame.
+
+    This function opens an Excel file in read-only and data-only mode and reads the specified
+    sheet (which contains the pivot table cached view). It assumes that the first non-empty row
+    in the sheet contains header values and then processes subsequent rows in chunks for efficiency.
 
     Args:
-        file_directory (str): The path to the directory containing the Excel file. Can be empty if the file is in the same location as the script.
+        file_directory (str): Path to the directory containing the Excel file. Can be empty if the file is local.
         file_name (str): The name of the Excel file.
-        sheet_name (str): The name of the sheet containing the pivot table.
-        pivot_table_name (str): The name of the pivot table.
-        chunk_size (int): The number of rows to read at a time.
+        sheet_name (str): The name of the sheet that contains the pivot table.
+        chunk_size (int): The number of rows to read per chunk. Defaults to 1000.
 
     Returns:
-        pandas.DataFrame: A DataFrame representing the pivot table, or None if an error occurs.
+        pd.DataFrame: A DataFrame containing the pivot table's cached data.
     """
-    try:
-        # Construct the full file path
-        if file_directory:
-            full_path = os.path.join(file_directory, file_name)
-        else:
-            full_path = file_name
+    # Construct the full file path
+    full_path = os.path.join(file_directory, file_name) if file_directory else file_name
+    print(f"Opening file: {full_path}")
 
-        print(f"Attempting to open file: {full_path}")
-        workbook = openpyxl.load_workbook(full_path, read_only=True, data_only=True)
-        print("Available sheets:", workbook.sheetnames)  # Print available sheet names
-
-        if sheet_name not in workbook.sheetnames:
-            print(f"Error: Sheet '{sheet_name}' not found in the Excel file.")
-            return None
-
-        sheet = workbook[sheet_name]
-
-        for pivot in sheet._pivots:
-            if pivot.name == pivot_table_name:
-                # Get the range of the pivot table
-                min_col, min_row, max_col, max_row = range_boundaries(pivot.cacheRange)
-                headers = [cell.value for cell in sheet.iter_rows(min_row=min_row, max_row=min_row, min_col=min_col, max_col=max_col)[0]]
-                data_chunks = []
-
-                # Extract data in chunks
-                for start_row in range(min_row + 1, max_row + 1, chunk_size):
-                    end_row = min(start_row + chunk_size - 1, max_row)
-                    chunk = []
-                    for row in sheet.iter_rows(min_row=start_row, max_row=end_row, min_col=min_col, max_col=max_col):
-                        row_values = [cell.value for cell in row]
-                        chunk.append(row_values)
-                    data_chunks.append(pd.DataFrame(chunk, columns=headers))
-
-                # Concatenate all chunks into a single DataFrame
-                df = pd.concat(data_chunks, ignore_index=True)
-                return df
-
-        print(f"Pivot table '{pivot_table_name}' not found.")
-        return None
-
-    except FileNotFoundError:
-        print(f"Error: File not found at '{full_path}'.")
-        return None
-    except KeyError:
+    # Load workbook in read-only and data-only mode for speed and to use cached values
+    wb = load_workbook(full_path, read_only=True, data_only=True)
+    
+    # Check if the target sheet exists
+    if sheet_name not in wb.sheetnames:
         print(f"Error: Sheet '{sheet_name}' not found in the Excel file.")
-        return None
-    except Exception as e:
-        print(f"An error occurred: {e}")
-        return None
+        return pd.DataFrame()  # Return an empty DataFrame if the sheet is missing
+
+    ws = wb[sheet_name]
+
+    # Use the iterator for rows (values_only=True returns cell values instead of Cell objects)
+    rows_iter = ws.iter_rows(values_only=True)
+
+    # Find the first non-empty row to use as header
+    header = None
+    for row in rows_iter:
+        if any(cell is not None for cell in row):
+            header = list(row)
+            break
+
+    if header is None:
+        print("Error: No header row found in the sheet.")
+        return pd.DataFrame()
+
+    # Process the remaining rows in chunks
+    data_chunks = []
+    current_chunk = []
+    row_count = 0
+    for row in rows_iter:
+        # Skip completely empty rows (optional)
+        if not any(cell is not None for cell in row):
+            continue
+        current_chunk.append(row)
+        row_count += 1
+        if row_count % chunk_size == 0:
+            data_chunks.append(pd.DataFrame(current_chunk, columns=header))
+            current_chunk = []
+
+    # Add any remaining rows as a final chunk
+    if current_chunk:
+        data_chunks.append(pd.DataFrame(current_chunk, columns=header))
+
+    # Concatenate all chunks into one DataFrame
+    if data_chunks:
+        df = pd.concat(data_chunks, ignore_index=True)
+    else:
+        df = pd.DataFrame(columns=header)
+
+    print(f"Finished reading. Total rows read (excluding header): {row_count}")
+    return df
+
 
 # Example usage:
-file_directory = r"C:\Users\U155771\OneDrive - L3Harris Technologies Inc\Code\Python\CAM Script"
-file_name = r"labor.xlsm"
-sheet_name = "Labor Pivot by Activity"
-pivot_table_name = "PivotTable1"
+if __name__ == "__main__":
+    # Google Python Style: clear variable names and inline comments
+    file_directory = r"C:\Users\U155771\OneDrive - L3Harris Technologies Inc\Code\Python\CAM Script"
+    file_name = r"labor.xlsm"
+    sheet_name = "Labor Pivot by Activity"
+    pivot_table_name = "PivotTable1"  # Not used in this version; we read the cached data only
 
-df_pivot = read_pivot_table(file_directory, file_name, sheet_name, pivot_table_name, chunk_size=1000)
+    # Read the pivot table data
+    df_pivot = read_large_pivot(file_directory, file_name, sheet_name, chunk_size=1000)
+    
+    # For testing: print first few rows
+    print(df_pivot.head())
