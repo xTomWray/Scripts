@@ -1,0 +1,76 @@
+import pandas as pd
+import openpyxl
+from openpyxl.utils import range_boundaries
+import os
+
+def read_pivot_table(file_directory, file_name, sheet_name, pivot_table_name, chunk_size=1000):
+    """
+    Reads a pivot table from an Excel file into a Pandas DataFrame using data chunking.
+
+    Args:
+        file_directory (str): The path to the directory containing the Excel file. Can be empty if the file is in the same location as the script.
+        file_name (str): The name of the Excel file.
+        sheet_name (str): The name of the sheet containing the pivot table.
+        pivot_table_name (str): The name of the pivot table.
+        chunk_size (int): The number of rows to read at a time.
+
+    Returns:
+        pandas.DataFrame: A DataFrame representing the pivot table, or None if an error occurs.
+    """
+    try:
+        # Construct the full file path
+        if file_directory:
+            full_path = os.path.join(file_directory, file_name)
+        else:
+            full_path = file_name
+
+        print(f"Attempting to open file: {full_path}")
+        workbook = openpyxl.load_workbook(full_path, read_only=True, data_only=True)
+        print("Available sheets:", workbook.sheetnames)  # Print available sheet names
+
+        if sheet_name not in workbook.sheetnames:
+            print(f"Error: Sheet '{sheet_name}' not found in the Excel file.")
+            return None
+
+        sheet = workbook[sheet_name]
+
+        for pivot in sheet._pivots:
+            if pivot.name == pivot_table_name:
+                # Get the range of the pivot table
+                min_col, min_row, max_col, max_row = range_boundaries(pivot.cacheRange)
+                headers = [cell.value for cell in sheet.iter_rows(min_row=min_row, max_row=min_row, min_col=min_col, max_col=max_col)[0]]
+                data_chunks = []
+
+                # Extract data in chunks
+                for start_row in range(min_row + 1, max_row + 1, chunk_size):
+                    end_row = min(start_row + chunk_size - 1, max_row)
+                    chunk = []
+                    for row in sheet.iter_rows(min_row=start_row, max_row=end_row, min_col=min_col, max_col=max_col):
+                        row_values = [cell.value for cell in row]
+                        chunk.append(row_values)
+                    data_chunks.append(pd.DataFrame(chunk, columns=headers))
+
+                # Concatenate all chunks into a single DataFrame
+                df = pd.concat(data_chunks, ignore_index=True)
+                return df
+
+        print(f"Pivot table '{pivot_table_name}' not found.")
+        return None
+
+    except FileNotFoundError:
+        print(f"Error: File not found at '{full_path}'.")
+        return None
+    except KeyError:
+        print(f"Error: Sheet '{sheet_name}' not found in the Excel file.")
+        return None
+    except Exception as e:
+        print(f"An error occurred: {e}")
+        return None
+
+# Example usage:
+file_directory = r"C:\Users\U155771\OneDrive - L3Harris Technologies Inc\Code\Python\CAM Script"
+file_name = r"labor.xlsm"
+sheet_name = "Labor Pivot by Activity"
+pivot_table_name = "PivotTable1"
+
+df_pivot = read_pivot_table(file_directory, file_name, sheet_name, pivot_table_name, chunk_size=1000)
