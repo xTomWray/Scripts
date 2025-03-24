@@ -6,27 +6,31 @@ def read_large_pivot(file_directory: str,
                      file_name: str,
                      sheet_name: str,
                      chunk_size: int = 1000,
+                     header_row: int = None,
                      program_filter: str = None,
-                     new_ps_filter: str = None,
+                     new_ps_program_filter: str = None,
                      activity_filter: str = None) -> pd.DataFrame:
-    """Reads a large pivot table's cached data from an Excel sheet and filters rows by specified criteria.
+    """
+    Reads a large pivot table's cached data from an Excel sheet and filters rows by specified criteria.
 
-    This function opens an Excel file in read-only and data-only mode and reads the specified sheet,
-    which contains the pivot table's cached view. It assumes that the first non-empty row in the sheet
-    contains header values. The rows are processed in chunks for efficiency. After loading, optional
-    filters for 'Program', 'New PS', and 'Activity' are applied to return only the matching rows.
+    This function opens an Excel file in read-only and data-only mode, targeting the specified sheet.
+    Since pivot table filters might be at the top of the sheet, you can specify the row number that
+    contains the actual column headings via the header_row parameter. Data is read in chunks for efficiency,
+    and optional filters for 'Program', 'New PS Program', and 'Activity' are applied.
 
     Args:
-        file_directory (str): The path to the directory containing the Excel file. Use an empty string if the file is local.
+        file_directory (str): The path to the directory containing the Excel file. Use an empty string if local.
         file_name (str): The name of the Excel file.
         sheet_name (str): The name of the sheet that contains the pivot table data.
         chunk_size (int): The number of rows to read per chunk. Defaults to 1000.
-        program_filter (str, optional): Value to filter the 'Program' column. Defaults to None.
-        new_ps_filter (str, optional): Value to filter the 'New PS' column. Defaults to None.
-        activity_filter (str, optional): Value to filter the 'Activity' column. Defaults to None.
+        header_row (int, optional): The row number that contains the actual table headers.
+            If None, the first non-empty row is used.
+        program_filter (str, optional): Filter value for the 'Program' column.
+        new_ps_program_filter (str, optional): Filter value for the 'New PS Program' column.
+        activity_filter (str, optional): Filter value for the 'Activity' column.
 
     Returns:
-        pd.DataFrame: A DataFrame containing the filtered pivot table data. If an error occurs or no data is found, returns an empty DataFrame.
+        pd.DataFrame: A DataFrame containing the filtered data, or an empty DataFrame if the sheet or data is not found.
     """
     # Construct the full file path.
     full_path = os.path.join(file_directory, file_name) if file_directory else file_name
@@ -35,33 +39,39 @@ def read_large_pivot(file_directory: str,
     # Load the workbook in read-only and data-only mode.
     wb = load_workbook(full_path, read_only=True, data_only=True)
 
-    # Ensure the target sheet exists.
+    # Check if the target sheet exists.
     if sheet_name not in wb.sheetnames:
         print(f"Error: Sheet '{sheet_name}' not found in the Excel file.")
         return pd.DataFrame()
 
     ws = wb[sheet_name]
-
-    # Create an iterator for rows (values_only=True returns cell values).
-    rows_iter = ws.iter_rows(values_only=True)
-
-    # Find the first non-empty row to use as header.
-    header = None
-    for row in rows_iter:
-        if any(cell is not None for cell in row):
-            header = list(row)
-            break
-
-    if header is None:
-        print("Error: No header row found in the sheet.")
-        return pd.DataFrame()
-
-    # Process rows in chunks for efficiency.
     data_chunks = []
+
+    # If header_row is specified, use it; otherwise, auto-detect the first non-empty row.
+    if header_row is not None:
+        header_row_values = next(ws.iter_rows(min_row=header_row, max_row=header_row, values_only=True))
+        header = list(header_row_values)
+        # Data starts from the row after header_row.
+        data_iter = ws.iter_rows(min_row=header_row+1, values_only=True)
+    else:
+        # Auto-detect header: first non-empty row.
+        data_iter = ws.iter_rows(values_only=True)
+        header = None
+        for row in data_iter:
+            if any(cell is not None for cell in row):
+                header = list(row)
+                break
+        if header is None:
+            print("Error: No header row found in the sheet.")
+            return pd.DataFrame()
+
+    print(f"Using header: {header}")
+
+    # Process rows in chunks.
     current_chunk = []
     row_count = 0
-    for row in rows_iter:
-        # Skip completely empty rows.
+    for row in data_iter:
+        # Skip rows that are completely empty.
         if not any(cell is not None for cell in row):
             continue
         current_chunk.append(row)
@@ -70,7 +80,7 @@ def read_large_pivot(file_directory: str,
             data_chunks.append(pd.DataFrame(current_chunk, columns=header))
             current_chunk = []
 
-    # Add any remaining rows as a final chunk.
+    # Add any remaining rows.
     if current_chunk:
         data_chunks.append(pd.DataFrame(current_chunk, columns=header))
 
@@ -84,11 +94,11 @@ def read_large_pivot(file_directory: str,
             df = df[df["Program"] == program_filter]
         else:
             print("Warning: 'Program' column not found in the data.")
-    if new_ps_filter is not None:
-        if "New PS" in df.columns:
-            df = df[df["New PS"] == new_ps_filter]
+    if new_ps_program_filter is not None:
+        if "New PS Program" in df.columns:
+            df = df[df["New PS Program"] == new_ps_program_filter]
         else:
-            print("Warning: 'New PS' column not found in the data.")
+            print("Warning: 'New PS Program' column not found in the data.")
     if activity_filter is not None:
         if "Activity" in df.columns:
             df = df[df["Activity"] == activity_filter]
@@ -97,29 +107,29 @@ def read_large_pivot(file_directory: str,
 
     return df
 
-
 # Example usage:
 if __name__ == "__main__":
-    # Set file path and sheet name.
+    # File path settings.
     file_directory = r"C:\Users\U155771\OneDrive - L3Harris Technologies Inc\Code\Python\CAM Script"
     file_name = r"labor.xlsm"
     sheet_name = "Labor Pivot by Activity"
     
-    # Define filters for 'Program', 'New PS', and 'Activity'.
-    program_filter = "Some Program"    # Replace with desired value.
-    new_ps_filter = "Some New PS"        # Replace with desired value.
-    activity_filter = "Some Activity"    # Replace with desired value.
+    # Specify the header row where actual table headings are found.
+    # Adjust this number to the row that contains your real column headers.
+    header_row = 3
+
+    # Filter for rows where the 'New PS Program' column equals "XXXX"
+    new_ps_program_filter = "XXXX"
 
     # Read and filter the pivot table data.
-    df_pivot_filtered = read_large_pivot(
+    df_filtered = read_large_pivot(
         file_directory,
         file_name,
         sheet_name,
         chunk_size=1000,
-        program_filter=program_filter,
-        new_ps_filter=new_ps_filter,
-        activity_filter=activity_filter
+        header_row=header_row,
+        new_ps_program_filter=new_ps_program_filter
     )
 
-    # Print the first few rows of the filtered data for verification.
-    print(df_pivot_filtered.head())
+    # Display the first few rows of the filtered data.
+    print(df_filtered.head())
